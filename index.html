@@ -132,10 +132,50 @@ let elapsed=0;           // 체공 시간(초)
 let lastTime=null;
 let rafId;
 
-let tissue, floorY, baseFloorY;
+// 첫 게임이 시작되기 전(start 오버레이 상태)에도 매 프레임 배경/바닥을 그리므로
+// floorY/tissue는 처음부터 유한한 값으로 초기화해둔다(resetPhysics에서 다시 설정됨)
+let tissue={ x:CW/2, y:CH*0.35, vx:0, vy:0, angle:0, angularVel:0 };
+let floorY=CH-40, baseFloorY=CH-40;
 let particles=[], gustVisuals=[], dangerZones=[];
 let nextGustTime=0, nextZoneTime=0, screenShake=0;
 const wobbleOffsets=Array.from({length:8},()=>Math.random()*Math.PI*2);
+
+// 배경 입체감을 위한 패럴랙스 구름(층이 멀수록 작고 흐리고 느리게 움직인다)
+const clouds=Array.from({length:9},(_,i)=>{
+  const layer=i%3;
+  return {
+    layer,
+    x:Math.random()*CW,
+    y:30+Math.random()*(CH*0.55),
+    r:16+layer*14+Math.random()*10,
+    speed:0.08+layer*0.07+Math.random()*0.05,
+    alpha:0.08+layer*0.07
+  };
+});
+function updateClouds(dt){
+  for(const c of clouds){
+    c.x += c.speed*60*dt;
+    if(c.x-c.r>CW+20) c.x=-c.r-20;
+  }
+}
+function drawClouds(){
+  for(const c of clouds){
+    const g=ctx.createRadialGradient(c.x,c.y,0, c.x,c.y,c.r);
+    g.addColorStop(0,`rgba(255,255,255,${c.alpha})`);
+    g.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=g;
+    ctx.beginPath();
+    ctx.ellipse(c.x,c.y,c.r,c.r*0.6,0,0,Math.PI*2);
+    ctx.fill();
+  }
+}
+function drawVignette(){
+  const g=ctx.createRadialGradient(CW/2,CH*0.38,CH*0.15, CW/2,CH*0.45,CH*0.85);
+  g.addColorStop(0,'rgba(0,0,0,0)');
+  g.addColorStop(1,'rgba(15,25,45,0.16)');
+  ctx.fillStyle=g;
+  ctx.fillRect(0,0,CW,CH);
+}
 
 // 터치(포인터) 상태: 마지막으로 누른 포인터 위치에서만 바람이 분다
 const pointers=new Map();
@@ -405,10 +445,12 @@ function updatePhysics(dt){
 
 function drawBackground(){
   const g=ctx.createLinearGradient(0,0,0,CH);
-  g.addColorStop(0,'#bfe0ff');
-  g.addColorStop(1,'#eef7ff');
+  g.addColorStop(0,'#9fcdfb');
+  g.addColorStop(0.55,'#cfe6ff');
+  g.addColorStop(1,'#f2f9ff');
   ctx.fillStyle=g;
   ctx.fillRect(0,0,CW,CH);
+  drawClouds();
 }
 
 function drawFloor(){
@@ -425,9 +467,15 @@ function drawFloor(){
     }
     ctx.restore();
   } else {
-    ctx.fillStyle='#5c4a3d';
+    const g=ctx.createLinearGradient(0,floorY,0,CH);
+    g.addColorStop(0,'#6d5847');
+    g.addColorStop(1,'#453830');
+    ctx.fillStyle=g;
     ctx.fillRect(0,floorY,CW,h);
   }
+  // 바닥 윗면 하이라이트(턱처럼 도드라져 보이게)
+  ctx.fillStyle='rgba(255,255,255,0.3)';
+  ctx.fillRect(0,floorY,CW,2);
 
   // 바닥 접근 경고: 티슈가 가까워질수록 화면 아래가 붉게 빛남
   if(state==='playing'){
@@ -496,16 +544,44 @@ function drawTissue(t){
     ctx.quadraticCurveTo(curr.x, curr.y, (curr.x+next.x)/2, (curr.y+next.y)/2);
   }
   ctx.closePath();
-  ctx.fillStyle='#ffffff';
-  ctx.strokeStyle='#d0d0d0';
-  ctx.lineWidth=1.5;
-  ctx.fill(); ctx.stroke();
 
-  ctx.strokeStyle='#e8e8e8'; ctx.lineWidth=0.5;
-  ctx.beginPath();
-  ctx.moveTo(-hw*0.3,-hh*0.5); ctx.quadraticCurveTo(0,hh*0.1, hw*0.3,-hh*0.4); ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(-hw*0.1,hh*0.1); ctx.quadraticCurveTo(hw*0.1,hh*0.4, hw*0.4,hh*0.15); ctx.stroke();
+  // 입체감 1: 은은한 그라디언트 + 드롭섀도로 종이 두께감을 표현
+  ctx.save();
+  ctx.shadowColor='rgba(30,40,60,0.35)';
+  ctx.shadowBlur=10;
+  ctx.shadowOffsetX=3;
+  ctx.shadowOffsetY=5;
+  const base=ctx.createLinearGradient(-hw,-hh,hw,hh);
+  base.addColorStop(0,'#ffffff');
+  base.addColorStop(0.55,'#f2f2f2');
+  base.addColorStop(1,'#dcdcdc');
+  ctx.fillStyle=base;
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle='rgba(150,150,150,0.6)';
+  ctx.lineWidth=1.2;
+  ctx.stroke();
+
+  // 입체감 2: 좌상단 광택(하이라이트)을 티슈 모양 안쪽으로만 클리핑해서 그림
+  ctx.save();
+  ctx.clip();
+  const sheen=ctx.createRadialGradient(-hw*0.35,-hh*0.45,0, -hw*0.35,-hh*0.45, hw*1.1);
+  sheen.addColorStop(0,'rgba(255,255,255,0.85)');
+  sheen.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=sheen;
+  ctx.fillRect(-hw-4,-hh-4,TISSUE_W+8,TISSUE_H+8);
+  ctx.restore();
+
+  // 입체감 3: 밝은 선/어두운 선을 짝지어 그어 접힌 주름이 도드라져 보이게 함
+  function crease(x1,y1,cx,cy,x2,y2){
+    ctx.beginPath(); ctx.moveTo(x1,y1+0.6); ctx.quadraticCurveTo(cx,cy+0.6,x2,y2+0.6);
+    ctx.strokeStyle='rgba(120,120,120,0.35)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1,y1-0.6); ctx.quadraticCurveTo(cx,cy-0.6,x2,y2-0.6);
+    ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=1; ctx.stroke();
+  }
+  crease(-hw*0.3,-hh*0.5, 0,hh*0.1, hw*0.3,-hh*0.4);
+  crease(-hw*0.1,hh*0.1, hw*0.1,hh*0.4, hw*0.4,hh*0.15);
+  crease(-hw*0.5,-hh*0.1, -hw*0.15,hh*0.3, -hw*0.05,hh*0.55);
 
   ctx.restore();
 }
@@ -524,6 +600,7 @@ function draw(t){
     drawShadow();
     drawTissue(t);
   }
+  drawVignette();
 }
 
 function loop(time){
@@ -531,6 +608,8 @@ function loop(time){
   const dt=Math.min(0.033, (time-lastTime)/1000);
   lastTime=time;
   const t=time/1000;
+
+  updateClouds(dt); // 배경 구름은 게임 상태와 무관하게 항상 흘러간다
 
   if(state==='playing'){
     elapsed+=dt;
