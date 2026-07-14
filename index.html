@@ -1,0 +1,410 @@
+<title>티슈 날리기</title>
+<style>
+:root{
+  --bg-light:#f4f5f7; --bg-dark:#0f1117;
+  --frame-light:#e7e9ee; --frame-dark:#1a1d27;
+  --text-light:#1b1e27; --text-dark:#e8e9ee;
+  --sub-light:#6b7280; --sub-dark:#8b8fa3;
+  --gold:#ffcc33; --danger:#ff4757; --wind:#4da6ff;
+}
+:root{ color-scheme: light dark; }
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none;}
+html,body{ touch-action:none; overscroll-behavior:none; }
+body{
+  margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Pretendard,sans-serif;
+  background:var(--bg-light); color:var(--text-light);
+}
+@media (prefers-color-scheme: dark){ body{ background:var(--bg-dark); color:var(--text-dark); } }
+:root[data-theme="dark"] body{ background:var(--bg-dark); color:var(--text-dark); }
+:root[data-theme="light"] body{ background:var(--bg-light); color:var(--text-light); }
+
+/* 휴대폰 프레임: 실제 모바일 화면 비율을 흉내낸 틀 */
+.frame{
+  position:relative; width:340px; height:600px; border-radius:34px; padding:10px;
+  background:var(--frame-light); box-shadow:0 14px 40px rgba(0,0,0,.16);
+}
+@media (prefers-color-scheme: dark){ .frame{ background:var(--frame-dark); box-shadow:0 14px 40px rgba(0,0,0,.5); } }
+:root[data-theme="dark"] .frame{ background:var(--frame-dark); }
+:root[data-theme="light"] .frame{ background:var(--frame-light); }
+
+.screen{ position:relative; width:100%; height:100%; border-radius:24px; overflow:hidden; }
+canvas{ display:block; width:100%; height:100%; }
+
+/* 상단 HUD: 타이머(좌) / 최고기록(우) */
+.hud{ position:absolute; top:14px; left:0; right:0; display:flex; justify-content:space-between; padding:0 16px; pointer-events:none; }
+.hud .timer{ font-size:22px; font-weight:800; color:#fff; text-shadow:0 1px 4px rgba(0,0,0,.4); font-variant-numeric:tabular-nums; }
+.hud .best{ font-size:13px; font-weight:600; color:rgba(255,255,255,.85); text-shadow:0 1px 4px rgba(0,0,0,.4); align-self:flex-start; padding-top:4px; }
+
+/* 단계 안내 텍스트: 화면 중앙 상단에 잠깐 나타났다 사라짐 */
+.stage-msg{
+  position:absolute; top:70px; left:0; right:0; text-align:center; pointer-events:none;
+  font-size:16px; font-weight:700; color:#fff; text-shadow:0 1px 6px rgba(0,0,0,.5);
+  opacity:0; transition:opacity .4s;
+}
+.stage-msg.show{ opacity:1; }
+
+/* 시작 화면 */
+.overlay{
+  position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+  text-align:center; color:#fff;
+}
+.overlay.show{ display:flex; }
+.start-overlay{ background:linear-gradient(180deg,#7fb8ff,#eaf4ff); }
+.start-tissue{ font-size:64px; animation:float 2.2s ease-in-out infinite; }
+@keyframes float{ 0%,100%{ transform:translateY(0) rotate(-4deg);} 50%{ transform:translateY(-14px) rotate(4deg);} }
+.start-hint{ font-size:15px; font-weight:700; color:#1b1e27; animation:pulse 1.6s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{ opacity:.55; } 50%{ opacity:1; } }
+
+/* 카운트다운 */
+.countdown-num{ font-size:96px; font-weight:800; color:#fff; text-shadow:0 2px 10px rgba(0,0,0,.4); }
+
+/* 게임오버 화면 */
+.gameover-overlay{ background:rgba(10,14,22,.72); backdrop-filter:blur(4px); }
+.go-score{ font-size:46px; font-weight:800; font-variant-numeric:tabular-nums; }
+.go-newbest{ font-size:15px; font-weight:800; color:var(--gold); height:20px; }
+.go-best-box{ background:#20242f; padding:10px 22px; border-radius:12px; font-size:14px; color:#fff; font-variant-numeric:tabular-nums; }
+.go-hint{ font-size:13px; color:rgba(255,255,255,.7); margin-top:6px; }
+</style>
+
+<div class="frame">
+  <div class="screen">
+    <canvas id="game" width="320" height="580"></canvas>
+
+    <div class="hud">
+      <div class="timer" id="timer">0.0초</div>
+      <div class="best" id="bestLabel">Best 0.0초</div>
+    </div>
+    <div class="stage-msg" id="stageMsg"></div>
+
+    <div class="overlay start-overlay show" id="startOverlay">
+      <div class="start-tissue">🧻</div>
+      <div class="start-hint">여기를 터치하세요</div>
+    </div>
+
+    <div class="overlay" id="countdownOverlay">
+      <div class="countdown-num" id="countdownNum">3</div>
+    </div>
+
+    <div class="overlay gameover-overlay" id="gameoverOverlay">
+      <div class="go-score" id="goScore">0.0초</div>
+      <div class="go-newbest" id="goNewBest"></div>
+      <div class="go-best-box" id="goBestBox">최고 기록 0.0초</div>
+      <div class="go-hint">화면을 터치하면 다시 시작</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+const CW=canvas.width, CH=canvas.height;
+
+const timerEl=document.getElementById('timer');
+const bestLabelEl=document.getElementById('bestLabel');
+const stageMsgEl=document.getElementById('stageMsg');
+const startOverlay=document.getElementById('startOverlay');
+const countdownOverlay=document.getElementById('countdownOverlay');
+const countdownNumEl=document.getElementById('countdownNum');
+const gameoverOverlay=document.getElementById('gameoverOverlay');
+const goScoreEl=document.getElementById('goScore');
+const goNewBestEl=document.getElementById('goNewBest');
+const goBestBoxEl=document.getElementById('goBestBox');
+
+const BEST_KEY='tissueFlyingBest';
+let best=parseFloat(localStorage.getItem(BEST_KEY)||'0');
+bestLabelEl.textContent=`Best ${best.toFixed(1)}초`;
+
+// 게임 상태: start -> countdown -> playing -> gameover
+let state='start';
+let elapsed=0;           // 체공 시간(초)
+let lastTime=null;
+let rafId;
+
+// 티슈 물리 상태
+let tissue, floorY, gravity;
+let gustVec={x:0,y:0}, gustTimer=0, nextGustAt=0;
+let dangerActive=false, floorRising=false;
+const TISSUE_R=17;
+const FLOOR_BASE=CH-40;      // 시작 시 바닥 높이
+const FLOOR_MIN_Y=150;       // 바닥이 최대한 올라와도 남는 최소 공간
+const DANGER_BAND=90;        // 위험 구간 높이
+
+// 터치(포인터) 상태: 마지막으로 누른 포인터 위치에서만 바람이 분다
+const pointers=new Map();
+let activeId=null;
+
+function resetPhysics(){
+  tissue={ x:CW/2, y:80, vx:0, vy:0, angle:0, swayPhase:Math.random()*10 };
+  floorY=FLOOR_BASE;
+  gravity=220;
+  gustVec={x:0,y:0}; gustTimer=0; nextGustAt=10+Math.random()*3;
+  dangerActive=false; floorRising=false;
+  elapsed=0;
+  stageMsgEl.classList.remove('show');
+  shownStage10=false; shownStage20=false;
+}
+
+let shownStage10=false, shownStage20=false;
+
+function localPos(clientX, clientY){
+  const rect=canvas.getBoundingClientRect();
+  return { x:(clientX-rect.left)*(CW/rect.width), y:(clientY-rect.top)*(CH/rect.height) };
+}
+
+// 화면 탭에 따른 상태 전이 처리(시작/재시작은 항상 카운트다운을 거친다)
+function handleTap(){
+  if(state==='start' || state==='gameover'){
+    startCountdown();
+  }
+  // 카운트다운 중 탭은 무시, 플레이 중 탭은 바람으로만 작동(별도 처리 없음)
+}
+
+function startCountdown(){
+  state='countdown';
+  startOverlay.classList.remove('show');
+  gameoverOverlay.classList.remove('show');
+  countdownOverlay.classList.add('show');
+  let n=3;
+  countdownNumEl.textContent=n;
+  const tick=()=>{
+    n--;
+    if(n>0){
+      countdownNumEl.textContent=n;
+      setTimeout(tick,700);
+    } else {
+      countdownOverlay.classList.remove('show');
+      resetPhysics();
+      state='playing';
+      lastTime=null;
+    }
+  };
+  setTimeout(tick,700);
+}
+
+function announceStage(text){
+  stageMsgEl.textContent=text;
+  stageMsgEl.classList.add('show');
+  setTimeout(()=>stageMsgEl.classList.remove('show'), 1800);
+}
+
+function triggerGameOver(){
+  state='gameover';
+  const score=elapsed;
+  const isNewBest=score>best;
+  if(isNewBest){ best=score; localStorage.setItem(BEST_KEY, best.toFixed(2)); }
+  bestLabelEl.textContent=`Best ${best.toFixed(1)}초`;
+  goScoreEl.textContent=`${score.toFixed(1)}초`;
+  goNewBestEl.textContent=isNewBest?'New Best!':'';
+  goBestBoxEl.textContent=`최고 기록 ${best.toFixed(1)}초`;
+  gameoverOverlay.classList.add('show');
+}
+
+// 물리 업데이트(dt: 초 단위)
+function update(dt){
+  elapsed+=dt;
+  timerEl.textContent=`${elapsed.toFixed(1)}초`;
+
+  // 난이도 단계 전환
+  if(elapsed>=15) floorRising=true;
+  if(elapsed>=20 && !dangerActive){ dangerActive=true; announceStage('위험 구간'); }
+  if(elapsed>=10 && !shownStage10){ shownStage10=true; announceStage('돌풍 주의'); }
+  if(elapsed>=20 && !shownStage20){ shownStage20=true; }
+  if(elapsed>=30) gravity=Math.min(220+(elapsed-30)*10, 900);
+
+  // 바닥 상승(최소 150px 공간은 보장)
+  if(floorRising) floorY=Math.max(FLOOR_MIN_Y, floorY-14*dt);
+
+  // 랜덤 돌풍(10초 이후)
+  if(elapsed>=10){
+    nextGustAt-=dt;
+    if(nextGustAt<=0){
+      const a=Math.random()*Math.PI*2;
+      gustVec={ x:Math.cos(a)*520, y:Math.sin(a)*260 };
+      gustTimer=0.55;
+      nextGustAt=2+Math.random()*2.5;
+    }
+  }
+  if(gustTimer>0){ gustTimer-=dt; if(gustTimer<0) gustTimer=0; }
+  const gustFactor=gustTimer>0 ? gustTimer/0.55 : 0;
+
+  // 가속도 누적: 중력 + 사용자 바람 + 돌풍 + 살랑거림 + 구석 방지 난기류
+  let ax=0, ay=gravity;
+
+  const p=activePointer();
+  if(p && state==='playing'){
+    const dx=tissue.x-p.x, dy=tissue.y-p.y;
+    const dist=Math.max(24, Math.hypot(dx,dy));
+    ax += (dx/dist)*950;
+    ay += (dy/dist)*950;
+  }
+
+  ax += gustVec.x*gustFactor;
+  ay += gustVec.y*gustFactor;
+
+  tissue.swayPhase += dt*2.6;
+  ax += Math.sin(tissue.swayPhase)*70;
+
+  // 벽/천장 구석에 몰리면 불규칙한 바람으로 밀어냄
+  const edge=40;
+  if(tissue.x<edge) ax += (edge-tissue.x)*6 + (Math.random()-0.5)*200;
+  if(tissue.x>CW-edge) ax -= (tissue.x-(CW-edge))*6 + (Math.random()-0.5)*200;
+  if(tissue.y<edge) ay += (edge-tissue.y)*6 + (Math.random()-0.5)*200;
+
+  // 위험 구간에 들어가면 빠르게 바닥 쪽으로 끌려감
+  if(dangerActive && tissue.y+TISSUE_R > floorY-DANGER_BAND){
+    ay += 1500;
+  }
+
+  // 공기저항
+  ax -= tissue.vx*1.1;
+  ay -= tissue.vy*1.1;
+
+  tissue.vx += ax*dt;
+  tissue.vy += ay*dt;
+  tissue.x += tissue.vx*dt;
+  tissue.y += tissue.vy*dt;
+  tissue.angle = Math.sin(tissue.swayPhase*0.9)*0.35 + tissue.vx*0.002;
+
+  // 벽/천장에 부딪히면 튕겨 나오고, 화면 밖으로는 나가지 않는다
+  if(tissue.x<TISSUE_R){ tissue.x=TISSUE_R; tissue.vx=Math.abs(tissue.vx)*0.5; }
+  if(tissue.x>CW-TISSUE_R){ tissue.x=CW-TISSUE_R; tissue.vx=-Math.abs(tissue.vx)*0.5; }
+  if(tissue.y<TISSUE_R){ tissue.y=TISSUE_R; tissue.vy=Math.abs(tissue.vy)*0.5; }
+
+  // 바닥에 닿으면 게임 오버
+  if(tissue.y+TISSUE_R >= floorY){
+    tissue.y=floorY-TISSUE_R;
+    triggerGameOver();
+  }
+}
+
+function activePointer(){
+  if(activeId!==null && pointers.has(activeId)) return pointers.get(activeId);
+  const it=pointers.values().next();
+  return it.done?null:it.value;
+}
+
+function drawBackground(){
+  const g=ctx.createLinearGradient(0,0,0,CH);
+  g.addColorStop(0,'#bfe0ff');
+  g.addColorStop(1,'#eef7ff');
+  ctx.fillStyle=g;
+  ctx.fillRect(0,0,CW,CH);
+}
+
+function drawFloor(){
+  const h=CH-floorY;
+  if(floorRising){
+    // 상승 중인 바닥: 빨간 줄무늬
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0,floorY,CW,h); ctx.clip();
+    ctx.fillStyle='#3a2f2f'; ctx.fillRect(0,floorY,CW,h);
+    ctx.strokeStyle='rgba(255,80,90,.9)'; ctx.lineWidth=8;
+    for(let x=-CH; x<CW+CH; x+=26){
+      ctx.beginPath(); ctx.moveTo(x,CH); ctx.lineTo(x+CH-floorY,floorY); ctx.stroke();
+    }
+    ctx.restore();
+  } else {
+    ctx.fillStyle='#5c4a3d';
+    ctx.fillRect(0,floorY,CW,h);
+  }
+
+  if(dangerActive){
+    const top=floorY-DANGER_BAND;
+    ctx.fillStyle='rgba(255,71,87,.28)';
+    ctx.fillRect(0,top,CW,DANGER_BAND);
+    ctx.fillStyle='#ff4757';
+    ctx.font='bold 12px sans-serif';
+    ctx.textAlign='right';
+    ctx.fillText('DANGER', CW-10, top+16);
+  }
+
+  // 바닥 접근 경고: 티슈가 가까워질수록 화면 아래가 붉게 빛남
+  if(state==='playing'){
+    const dist=floorY-(tissue.y+TISSUE_R);
+    const proximity=Math.max(0, 1-dist/140);
+    if(proximity>0){
+      const glow=ctx.createLinearGradient(0,CH-160,0,CH);
+      glow.addColorStop(0,'rgba(255,60,70,0)');
+      glow.addColorStop(1,`rgba(255,60,70,${0.5*proximity})`);
+      ctx.fillStyle=glow;
+      ctx.fillRect(0,CH-160,CW,160);
+    }
+  }
+}
+
+function drawWindHint(){
+  const p=activePointer();
+  if(p && state==='playing'){
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,26,0,Math.PI*2);
+    ctx.strokeStyle='rgba(77,166,255,.55)';
+    ctx.lineWidth=3;
+    ctx.stroke();
+  }
+}
+
+function drawTissue(){
+  ctx.save();
+  ctx.translate(tissue.x,tissue.y);
+  ctx.rotate(tissue.angle);
+  ctx.fillStyle='#ffffff';
+  ctx.strokeStyle='rgba(0,0,0,.08)';
+  ctx.lineWidth=1;
+  ctx.beginPath();
+  const r=TISSUE_R;
+  // 살짝 일그러진 사각형으로 하늘하늘한 티슈 느낌 표현
+  ctx.moveTo(-r, -r*0.7);
+  ctx.quadraticCurveTo(0,-r*1.15, r, -r*0.7);
+  ctx.quadraticCurveTo(r*1.15,0, r, r*0.7);
+  ctx.quadraticCurveTo(0, r*1.15, -r, r*0.7);
+  ctx.quadraticCurveTo(-r*1.15,0, -r, -r*0.7);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
+function draw(){
+  drawBackground();
+  drawFloor();
+  if(state==='playing'){ drawWindHint(); drawTissue(); }
+  else if(state==='countdown'){ drawTissue(); }
+}
+
+function loop(time){
+  if(lastTime===null) lastTime=time;
+  const dt=Math.min(0.033, (time-lastTime)/1000);
+  lastTime=time;
+  if(state==='playing') update(dt);
+  draw();
+  rafId=requestAnimationFrame(loop);
+}
+
+// 포인터(터치/마우스) 처리: 여러 손가락이 닿아도 마지막으로 누른 위치에서만 바람이 분다
+canvas.addEventListener('pointerdown', e=>{
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, localPos(e.clientX,e.clientY));
+  activeId=e.pointerId;
+  handleTap();
+});
+canvas.addEventListener('pointermove', e=>{
+  if(pointers.has(e.pointerId)) pointers.set(e.pointerId, localPos(e.clientX,e.clientY));
+});
+function releasePointer(e){
+  pointers.delete(e.pointerId);
+  if(activeId===e.pointerId){
+    const it=pointers.keys().next();
+    activeId=it.done?null:it.value;
+  }
+}
+canvas.addEventListener('pointerup', releasePointer);
+canvas.addEventListener('pointercancel', releasePointer);
+
+// 오버레이(시작/게임오버 화면) 탭도 동일하게 처리
+[startOverlay, gameoverOverlay].forEach(el=>{
+  el.addEventListener('pointerdown', e=>{ e.stopPropagation(); handleTap(); });
+});
+
+draw();
+rafId=requestAnimationFrame(loop);
+</script>
